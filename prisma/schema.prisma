@@ -1,0 +1,254 @@
+// =====================================================================
+// Restaurant Management System: Prisma schema (Phase 2)
+// =====================================================================
+// Conventions used throughout:
+//  - Money is Decimal(10,2), never Float, to avoid rounding errors.
+//  - Inventory quantities are in GRAMS (liquids included) so there is
+//    only ever one unit system to reason about.
+//  - Tables are mapped to snake_case plural names for clean SQL.
+//  - Relations default to onDelete: Restrict unless noted, so the
+//    database refuses deletes that would orphan or erase history.
+// =====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------
+
+enum Role {
+  CUSTOMER
+  ADMIN
+}
+
+// RESERVED is intentionally NOT stored. It is derived at query time from
+// the reservations table, which avoids stale status values.
+enum TableStatus {
+  FREE
+  OCCUPIED
+}
+
+enum ReservationStatus {
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum OrderType {
+  DINE_IN
+  TAKEOUT
+  DELIVERY
+}
+
+// Lifecycle: PENDING -> PREPARING -> SERVED -> PAID (CANCELLED from the
+// first two only). The allowed transitions are enforced in the service.
+enum OrderStatus {
+  PENDING
+  PREPARING
+  SERVED
+  PAID
+  CANCELLED
+}
+
+// ---------------------------------------------------------------------
+// Users
+// ---------------------------------------------------------------------
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String // bcrypt hash, never the plain password
+  name         String
+  phone        String?
+  role         Role     @default(CUSTOMER)
+  createdAt    DateTime @default(now())
+
+  orders       Order[]
+  reservations Reservation[]
+
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------
+// Menu
+// ---------------------------------------------------------------------
+
+model Category {
+  id   Int    @id @default(autoincrement())
+  name String @unique
+
+  menuItems MenuItem[]
+
+  @@map("categories")
+}
+
+model MenuItem {
+  id          Int     @id @default(autoincrement())
+  name        String
+  description String?
+  price       Decimal @db.Decimal(10, 2)
+
+  // isAvailable: staff switch ("86 the dish") so customers cannot order
+  //   something the kitchen cannot make, even though stock may go negative.
+  // isDeleted: soft delete. Past orders reference menu items, so rows are
+  //   hidden rather than removed to keep order history intact.
+  isAvailable Boolean @default(true)
+  isDeleted   Boolean @default(false)
+
+  categoryId Int
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  recipe     RecipeItem[]
+  orderItems OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([categoryId])
+  @@map("menu_items")
+}
+
+// ---------------------------------------------------------------------
+// Inventory
+// ---------------------------------------------------------------------
+
+model InventoryItem {
+  id   Int    @id @default(autoincrement())
+  name String @unique
+
+  // May go NEGATIVE on purpose (business rule: allow the order and flag it),
+  // so there is deliberately no "must be >= 0" constraint here.
+  quantityGrams Decimal @default(0) @db.Decimal(12, 2)
+
+  // At or below this level the item shows up in stock alerts.
+  reorderLevel Decimal @default(0) @db.Decimal(12, 2)
+
+  recipeItems RecipeItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("inventory_items")
+}
+
+// Join table: "one portion of this menu item uses X grams of this ingredient".
+// The composite primary key guarantees an ingredient appears once per recipe.
+model RecipeItem {
+  menuItemId      Int
+  inventoryItemId Int
+  gramsUsed       Decimal @db.Decimal(10, 2)
+
+  // Cascade: if a menu item is ever hard-deleted, its recipe goes with it.
+  menuItem      MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  // Restrict: an ingredient that is still used in a recipe cannot be deleted.
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+  @@id([menuItemId, inventoryItemId])
+  @@index([inventoryItemId])
+  @@map("recipe_items")
+}
+
+// ---------------------------------------------------------------------
+// Tables and reservations
+// ---------------------------------------------------------------------
+
+// Named "Table" in code (prisma.table) but mapped to restaurant_tables
+// because TABLE is a reserved word in SQL.
+model Table {
+  id       Int         @id @default(autoincrement())
+  number   Int         @unique // the number painted on the physical table
+  capacity Int
+  status   TableStatus @default(FREE)
+
+  reservations Reservation[]
+  orders       Order[]
+
+  @@map("restaurant_tables")
+}
+
+model Reservation {
+  id        Int               @id @default(autoincrement())
+  startTime DateTime
+  // endTime = startTime + default duration (90 min). Stored explicitly so
+  // overlap queries stay simple and a custom duration remains possible.
+  endTime   DateTime
+  partySize Int
+  status    ReservationStatus @default(CONFIRMED)
+  createdAt DateTime          @default(now())
+
+  userId  Int
+  user    User  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  tableId Int
+  table   Table @relation(fields: [tableId], references: [id], onDelete: Restrict)
+
+  // The overlap check filters by table and time window, so index exactly that.
+  @@index([tableId, startTime, endTime])
+  @@index([userId])
+  @@map("reservations")
+}
+
+// ---------------------------------------------------------------------
+// Orders
+// ---------------------------------------------------------------------
+
+model Order {
+  id     Int         @id @default(autoincrement())
+  type   OrderType
+  status OrderStatus @default(PENDING)
+
+  // Stored (not recomputed) so reports and receipts never change if a menu
+  // price is edited later.
+  totalAmount     Decimal @db.Decimal(10, 2)
+  deliveryAddress String? // required only when type = DELIVERY (enforced in Zod/service)
+  notes           String?
+
+  // Optional: guest orders have no user. SetNull keeps the order if the
+  // account is ever removed.
+  userId Int?
+  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Optional: only DINE_IN orders have a table.
+  tableId Int?
+  table   Table? @relation(fields: [tableId], references: [id], onDelete: SetNull)
+
+  items OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([userId])
+  @@index([tableId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id       Int @id @default(autoincrement())
+  quantity Int
+
+  // PRICE SNAPSHOT: the price at the moment of ordering. Changing the menu
+  // price later must not rewrite what past customers actually paid.
+  unitPrice Decimal @db.Decimal(10, 2)
+
+  // Cascade: items cannot exist without their order.
+  orderId Int
+  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  // Restrict: a menu item that appears in orders can never be hard-deleted
+  // (this is why menu deletion is a soft delete).
+  menuItemId Int
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([menuItemId])
+  @@map("order_items")
+}

@@ -11,8 +11,8 @@
 > 4. Business rules live in services only ([Section 6](#6-business-rules)).
 
 **Project:** CodeAlpha Backend Internship, Task 3
-**Last updated:** 2026-10-09
-**Current phase:** Phase 1 (not started)
+**Last updated:** 2026-10-10
+**Current phase:** Phase 2 (schema and seed written, awaiting migration)
 
 ---
 
@@ -34,17 +34,26 @@ A backend REST API for running a restaurant: managing the menu, taking orders (d
 
 ## 2. Tech stack (final)
 
-| Concern                   | Choice                                            | Notes                                                                                                      |
-| ------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Language                  | JavaScript (CommonJS: `require`/`module.exports`) | Chosen for simple Jest compatibility                                                                       |
-| Runtime / framework       | Node.js 20+ and **Express 5**                     | Express 5 forwards async errors to the error handler automatically, so no `asyncHandler` wrapper is needed |
-| Database                  | PostgreSQL                                        |                                                                                                            |
-| ORM                       | **Prisma 6.19.3 (pinned)**                        | Prisma 7 requires driver adapters and a new config file; 6.x keeps setup simple                            |
-| Validation                | **Zod** (v4)                                      | Use `error.issues` when formatting validation errors                                                       |
-| Auth                      | JWT (`jsonwebtoken`) + `bcryptjs`                 | `bcryptjs` is pure JS, so no native build problems on Windows                                              |
-| Security / logging        | `helmet`, `cors`, `morgan`                        |                                                                                                            |
-| Testing                   | **Jest** + **Supertest**                          | Separate test database via `.env.test`                                                                     |
-| API docs / manual testing | **Postman** collection stored in `/postman`       |                                                                                                            |
+| Concern                   | Choice                                                                 | Notes                                                                                                      |
+| ------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Language                  | JavaScript with **ES Modules** (`import`/`export`, `"type": "module"`) | See [ESM conventions](#23-esm-conventions)                                                                 |
+| Runtime / framework       | Node.js 20+ and **Express 5**                                          | Express 5 forwards async errors to the error handler automatically, so no `asyncHandler` wrapper is needed |
+| Database                  | PostgreSQL                                                             |                                                                                                            |
+| ORM                       | **Prisma 6.19.3 (pinned)**                                             | Prisma 7 requires driver adapters and a new config file; 6.x keeps setup simple                            |
+| Validation                | **Zod** (v4)                                                           | Use `error.issues` when formatting validation errors                                                       |
+| Auth                      | JWT (`jsonwebtoken`) + `bcryptjs`                                      | `bcryptjs` is pure JS, so no native build problems on Windows                                              |
+| Security / logging        | `helmet`, `cors`, `morgan`                                             |                                                                                                            |
+| Testing                   | **Jest** + **Supertest**                                               | Run in native ESM mode; separate test database via `.env.test`                                             |
+| API docs / manual testing | **Postman** collection stored in `/postman`                            |                                                                                                            |
+
+### 2.3 ESM conventions
+
+- `package.json` has `"type": "module"`. Use `import`/`export`, never `require`/`module.exports`.
+- **Relative imports must include the file extension:** `import { prisma } from "../../config/prisma.js"`.
+- Prisma: `import { PrismaClient } from "@prisma/client"`. CJS packages (`bcryptjs`, `jsonwebtoken`) use default imports: `import bcrypt from "bcryptjs"`.
+- `__dirname` does not exist. Use `import.meta.dirname` (Node 20.11+) when a path is needed.
+- Jest runs through `node --experimental-vm-modules` (already set in `npm test`). Import `jest` explicitly (`import { jest } from "@jest/globals"`) and use `jest.unstable_mockModule` instead of `jest.mock`. Prefer real-database integration tests over heavy mocking.
+- Jest prints an "ExperimentalWarning: VM Modules" message. It is harmless.
 
 ---
 
@@ -438,7 +447,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. When a box is ticked, add
 
 **Goal:** a runnable project skeleton on GitHub.
 
-- [ ] Run the scaffold script (`setup.sh`) to create folders/files and install packages
+- [x] Run the scaffold script (`setup.sh`) to create folders/files and install packages
 - [ ] Create the GitHub repository and push the initial commit
 - [ ] Copy this AGENT.md into the repo root
 - [ ] Create `.env` from `.env.example` and set `DATABASE_URL`; create the `restaurant` and `restaurant_test` databases
@@ -450,9 +459,9 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. When a box is ticked, add
 
 **Goal:** the full data model in PostgreSQL. Covers **R2**.
 
-- [ ] Write `schema.prisma`: all models, enums, relations, unique constraints (see [Section 5](#5-data-model))
+- [x] Write `schema.prisma`: all models, enums, relations, unique constraints (see [Section 5](#5-data-model))
 - [ ] Run the first migration (`npm run db:migrate`)
-- [ ] Seed script: one ADMIN user, categories, sample menu items, ingredients with recipes, tables
+- [x] Seed script: one ADMIN user, categories, sample menu items, ingredients with recipes, tables
 - [ ] Verify the data in Prisma Studio (`npm run db:studio`)
 
 **Done when:** a fresh database can be migrated and seeded with two commands.
@@ -560,9 +569,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. When a box is ticked, add
 
 ### Progress log
 
-| Date       | Phase / Feature                     | PR / Commit | Notes                     |
-| ---------- | ----------------------------------- | ----------- | ------------------------- |
-| 2026-10-09 | Planning, AGENT.md, scaffold script | n/a         | Design decisions captured |
+| Date       | Phase / Feature                     | PR / Commit    | Notes                                                                       |
+| ---------- | ----------------------------------- | -------------- | --------------------------------------------------------------------------- |
+| 2026-10-09 | Planning, AGENT.md, scaffold script | n/a            | Design decisions captured                                                   |
+| 2026-10-10 | Phase 2 schema + seed written       | pending commit | Schema validated with `prisma validate`; migration and seed run still to do |
 
 ---
 
@@ -594,4 +604,5 @@ Defaults below are used unless changed. Each is resolved in the phase shown.
 | Cancel restocks only PENDING orders                              | User (confirmed) | 2026-10-09 |
 | Overlap-checked reservations, 90 min default + 15 min buffer     | User (confirmed) | 2026-10-09 |
 | Prisma pinned to 6.19.3 (avoid Prisma 7 adapter/config changes)  | Proposed         | 2026-10-09 |
-| CommonJS modules, Express 5, `bcryptjs`                          | Proposed         | 2026-10-09 |
+| Express 5, `bcryptjs`                                            | Proposed         | 2026-10-09 |
+| ES Modules instead of CommonJS                                   | User             | 2026-10-10 |
